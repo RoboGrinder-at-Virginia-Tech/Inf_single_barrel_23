@@ -167,7 +167,7 @@ typedef struct
 	//pointer to original source of information
 	const chassis_move_t* chassis_move_ptr;
 	const gimbal_control_t* gimbal_control_ptr;
-	const fp32* quat_ptr; //const fp32 *get_INS_gimbal_quat(void)
+	const fp32* quat_ptr; //const fp32 *get_INS_quat(void)
 	const shoot_control_t* shoot_control_ptr;
 	
 	fp32 s_vx_m; // m/s

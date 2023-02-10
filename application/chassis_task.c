@@ -261,7 +261,7 @@ static void chassis_init(chassis_move_t *chassis_move_init)
     chassis_move_init->chassis_RC = get_remote_control_point();
     //get gyro sensor euler angle point
     //获取陀螺仪姿态角指针
-    chassis_move_init->chassis_INS_angle = get_INS_gimbal_angle_point();//SZL 2-2-2022 从get_INS_angle_point改为现在这个
+    chassis_move_init->chassis_INS_angle = get_INS_angle_point();//SZL 2-2-2022 从get_INS_angle_point改为现在这个
     //get gimbal motor data point
     //获取云台电机数据指针
     chassis_move_init->chassis_yaw_motor = get_yaw_motor_point();

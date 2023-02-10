@@ -33,13 +33,23 @@
 #include "ist8310driver.h"
 #include "pid.h"
 #include "ahrs.h"
+#include "MahonyAHRS.h"
+#include "math.h"
 
 #include "calibrate_task.h"
 #include "detect_task.h"
 
+#include "user_lib.h"
+
 
 #define IMU_temp_PWM(pwm)  imu_pwm_set(pwm)                    //pwm给定
 
+//#define BMI088_BOARD_INSTALL_SPIN_MATRIX    \
+//    {0.0f, 1.0f, 0.0f},                     \
+//    {-1.0f, 0.0f, 0.0f},                     \
+//    {0.0f, 0.0f, 1.0f}                      \
+
+//1-10-2023修改
 #define BMI088_BOARD_INSTALL_SPIN_MATRIX    \
     {0.0f, 1.0f, 0.0f},                     \
     {-1.0f, 0.0f, 0.0f},                     \
@@ -55,23 +65,30 @@
 		SZL 2-2-2022添加 新步兵 陀螺仪转90度后的 开发板的三轴欧拉角坐标系INS_angle[3] 转换为 云台三轴欧拉角坐标系INS_gimbal_angle[3]:
 The 3-axis Euler angular coordinate system INS_angle[3] of the type C board will be converted to the 3-axis Euler angular coordinate system INS_gimbal_angle[3] of the gimbal:
 
+		SZL 1-8-2023 问题: 这样计算矩阵乘法 每一次iteration都会算 2个3*3 Ax 和 1个4*4 Bx 即总计34次浮点数乘法, 比较浪费时间
+		修改方案(1): 将三个rotation matrix换成标定的index(取原数组中第几个),和direction(正还是负) => 基于云台坐标的三轴欧拉角 和 三轴角速度
+			通过宏标定的index和direction不好直观想象, 他们也是来自于 Ax 之类的permutation matrix的推导
+		
+		修改方案(2): 将BMI088原始度数旋转到正确的方向(基于云台坐标的方向), 放入AHRS_update(...)等函数中进行计算 => 基于云台坐标的三轴欧拉角 和 三轴角速度
+		目前采取修改方案(2)
 		*/
+//以下三个矩阵不再需要了
 //三轴欧拉角的转换 ANGLE_TypeC_COORD_TO_GIMBAL_COORD_PERMUTATION_MATRIX
-#define ANGLE_TypeC_COORD_TO_GIMBAL_COORD_PERMUTATION_MATRIX	\
-		{1.0f, 0.0f, 0.0f},                     						\
-		{0.0f, 0.0f, 1.0f},                     						\
-		{0.0f, -1.0f, 0.0f} 																	\
+//#define ANGLE_TypeC_COORD_TO_CHASSIS_COORD_PERMUTATION_MATRIX	\
+//		{1.0f, 0.0f, 0.0f},                     						\
+//		{0.0f, 0.0f, 1.0f},                     						\
+//		{0.0f, -1.0f, 0.0f} 																	\
 
-#define GYRO_TypeC_COORD_TO_GIMBAL_COORD_PERMUTATION_MATRIX \
-		{0.0f, 0.0f, 1.0f},                     								\
-		{1.0f, 0.0f, 0.0f},                     								\
-		{0.0f, -1.0f, 0.0f}  																		\
+//#define GYRO_TypeC_COORD_TO_CHASSIS_COORD_PERMUTATION_MATRIX \
+//		{0.0f, 0.0f, 1.0f},                     								\
+//		{1.0f, 0.0f, 0.0f},                     								\
+//		{0.0f, -1.0f, 0.0f}  																		\
 
-#define QUAT_TypeC_COORD_TO_GIMBAL_COORD_PERMUTATION_MATRIX \
-		{1.0f, 0.0f, 0.0f, 0.0f},																\
-		{0.0f, 0.0f, -1.0f, 0.0f},                     					\
-		{0.0f, 1.0f, 0.0f, 0.0f},                     					\
-		{0.0f, 0.0f, 0.0f, 1.0f}  															\
+//#define QUAT_TypeC_COORD_TO_CHASSIS_COORD_PERMUTATION_MATRIX \
+//		{1.0f, 0.0f, 0.0f, 0.0f},																\
+//		{0.0f, 0.0f, -1.0f, 0.0f},                     					\
+//		{0.0f, 1.0f, 0.0f, 0.0f},                     					\
+//		{0.0f, 0.0f, 0.0f, 1.0f}  															\
 
 /**
   * @brief          rotate the gyro, accel and mag, and calculate the zero drift, because sensors have 
@@ -117,8 +134,12 @@ static void imu_temp_control(fp32 temp);
   */
 static void imu_cmd_spi_dma(void);
 
-static void matrix_3x3_pre_mult_vector(fp32 in_vector[3], fp32 matrixA[3][3], fp32 out_vector[3]);
-static void quat_matrix_3x3_pre_mult_vector(fp32 in_vector[4], fp32 matrixA[4][4], fp32 out_vector[4]);
+void AHRS_init_ins(fp32 quat[4], fp32 accel[3], fp32 mag[3]);
+void AHRS_update_ins(fp32 quat[4], fp32 time, fp32 gyro[3], fp32 accel[3], fp32 mag[3]);
+void get_angle_ins(fp32 quat[4], fp32 *yaw, fp32 *pitch, fp32 *roll);
+
+//static void matrix_3x3_pre_mult_vector(fp32 in_vector[3], fp32 matrixA[3][3], fp32 out_vector[3]);
+//static void quat_matrix_3x3_pre_mult_vector(fp32 in_vector[4], fp32 matrixA[4][4], fp32 out_vector[4]);
 
 extern SPI_HandleTypeDef hspi1;
 
@@ -172,22 +193,26 @@ static fp32 accel_fliter_3[3] = {0.0f, 0.0f, 0.0f};
 static const fp32 fliter_num[3] = {1.929454039488895f, -0.93178349823448126f, 0.002329458745586203f};
 
 
-
-
 fp32 INS_gyro[3] = {0.0f, 0.0f, 0.0f};// SZL 修改 去掉 static
-static fp32 INS_accel[3] = {0.0f, 0.0f, 0.0f};
-static fp32 INS_mag[3] = {0.0f, 0.0f, 0.0f};
+fp32 INS_accel[3] = {0.0f, 0.0f, 0.0f}; //SZL 删掉static
+fp32 INS_mag[3] = {0.0f, 0.0f, 0.0f}; //SZL 删掉static
 fp32 INS_quat[4] = {0.0f, 0.0f, 0.0f, 0.0f}; //SZL 删掉static
 fp32 INS_angle[3] = {0.0f, 0.0f, 0.0f};      //euler angle, unit rad.欧拉角 单位 rad
 
-fp32 INS_gimbal_angle[3] = {0.0f, 0.0f, 0.0f};//转换为gimbal三轴坐标
-fp32 tpyeC_to_gimbal_permutation[3][3] = {ANGLE_TypeC_COORD_TO_GIMBAL_COORD_PERMUTATION_MATRIX};
+//first_order_filter_type_t bcmd_pitch_rate_slow_set_angular_velocity; //一阶低通滤波 用到 pitch rate, 减少快速跳变
+first_order_filter_type_t bcmd_pitch_rate_low_pass_filter;
+fp32 INS_gyro_pitch_low_pass_filtered_val = 0;
 
-fp32 INS_gimbal_gyro[3] = {0.0f, 0.0f, 0.0f};
-fp32 tpyeC_to_gimbal_GYRO_permutation[3][3] = {GYRO_TypeC_COORD_TO_GIMBAL_COORD_PERMUTATION_MATRIX};
+/*SZL 1-10-2023对该算法又升级了一次 直接从传感器坐标系 转换 到机器人坐标系*/
 
-fp32 INS_gimbal_quat[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-fp32 tpyeC_to_gimbal_QUAT_permutation[4][4] = {QUAT_TypeC_COORD_TO_GIMBAL_COORD_PERMUTATION_MATRIX};
+fp32 (*INS_gimbal_angle)[3] = 0x00; //{0.0f, 0.0f, 0.0f};//转换为gimbal三轴坐标
+//fp32 tpyeC_to_gimbal_permutation[3][3] = {ANGLE_TypeC_COORD_TO_CHASSIS_COORD_PERMUTATION_MATRIX};
+
+fp32 (*INS_gimbal_gyro)[3] = 0x00; //= {0.0f, 0.0f, 0.0f};
+//fp32 tpyeC_to_gimbal_GYRO_permutation[3][3] = {GYRO_TypeC_COORD_TO_CHASSIS_COORD_PERMUTATION_MATRIX};
+
+fp32 (*INS_gimbal_quat)[4] = 0x00; //= {0.0f, 0.0f, 0.0f, 0.0f};
+//fp32 tpyeC_to_gimbal_QUAT_permutation[4][4] = {QUAT_TypeC_COORD_TO_CHASSIS_COORD_PERMUTATION_MATRIX};
 /* SZL 5-31-2022 一下说明待更新
 开发板的三轴欧拉角坐标系INS_angle[3] 转换为 云台三轴欧拉角坐标系INS_gimbal_angle[3]:
 The 3-axis Euler angular coordinate system INS_angle[3] of the type C board will be converted to the 3-axis Euler angular coordinate system INS_gimbal_angle[3] of the gimbal:
@@ -217,29 +242,29 @@ SZL 2-2-2022添加 vector_pre_mult_3x3_matrix 指的是 matrix_3x3_pre_mult_vector
 */
 //fp32 gyro[3], fp32 accel[3], fp32 mag[3], bmi088_real_data_t *bmi088, ist8310_real_data_t *ist8310
 //(fp32 in_vector[3], fp32 matrixA[3][3], fp32 out_vector[3])
-static void matrix_3x3_pre_mult_vector(fp32 in_vector[3], fp32 matrixA[3][3], fp32 out_vector[3])
-{
-//    for (uint8_t i = 0; i < 3; i++)
-//    {
-//        gyro[i] = bmi088->gyro[0] * gyro_scale_factor[i][0] + bmi088->gyro[1] * gyro_scale_factor[i][1] + bmi088->gyro[2] * gyro_scale_factor[i][2] + gyro_offset[i];
-//        accel[i] = bmi088->accel[0] * accel_scale_factor[i][0] + bmi088->accel[1] * accel_scale_factor[i][1] + bmi088->accel[2] * accel_scale_factor[i][2] + accel_offset[i];
-//        mag[i] = ist8310->mag[0] * mag_scale_factor[i][0] + ist8310->mag[1] * mag_scale_factor[i][1] + ist8310->mag[2] * mag_scale_factor[i][2] + mag_offset[i];
-//    }
-		
-		for (uint8_t i = 0; i < 3; i++)//i=0,1,2
-		{
-				out_vector[i] = in_vector[0] * matrixA[i][0] + in_vector[1] * matrixA[i][1] + in_vector[2] * matrixA[i][2];
-		}
-}
+//static void matrix_3x3_pre_mult_vector(fp32 in_vector[3], fp32 matrixA[3][3], fp32 out_vector[3])
+//{
+////    for (uint8_t i = 0; i < 3; i++)
+////    {
+////        gyro[i] = bmi088->gyro[0] * gyro_scale_factor[i][0] + bmi088->gyro[1] * gyro_scale_factor[i][1] + bmi088->gyro[2] * gyro_scale_factor[i][2] + gyro_offset[i];
+////        accel[i] = bmi088->accel[0] * accel_scale_factor[i][0] + bmi088->accel[1] * accel_scale_factor[i][1] + bmi088->accel[2] * accel_scale_factor[i][2] + accel_offset[i];
+////        mag[i] = ist8310->mag[0] * mag_scale_factor[i][0] + ist8310->mag[1] * mag_scale_factor[i][1] + ist8310->mag[2] * mag_scale_factor[i][2] + mag_offset[i];
+////    }
+//		
+//		for (uint8_t i = 0; i < 3; i++)//i=0,1,2
+//		{
+//				out_vector[i] = in_vector[0] * matrixA[i][0] + in_vector[1] * matrixA[i][1] + in_vector[2] * matrixA[i][2];
+//		}
+//}
 
-/*SZL 5-31-2022 用于四元数与旋转矩阵的计算*/
-static void quat_matrix_3x3_pre_mult_vector(fp32 in_vector[4], fp32 matrixA[4][4], fp32 out_vector[4])
-{
-		for (uint8_t i = 0; i < 4; i++)//i=0,1,2,3
-		{
-				out_vector[i] = in_vector[0] * matrixA[i][0] + in_vector[1] * matrixA[i][1] + in_vector[2] * matrixA[i][2] + in_vector[3] * matrixA[i][3];
-		}
-}
+///*SZL 5-31-2022 用于四元数与旋转矩阵的计算*/
+//static void quat_matrix_3x3_pre_mult_vector(fp32 in_vector[4], fp32 matrixA[4][4], fp32 out_vector[4])
+//{
+//		for (uint8_t i = 0; i < 4; i++)//i=0,1,2,3
+//		{
+//				out_vector[i] = in_vector[0] * matrixA[i][0] + in_vector[1] * matrixA[i][1] + in_vector[2] * matrixA[i][2] + in_vector[3] * matrixA[i][3];
+//		}
+//}
 
 /**
   * @brief          imu task, init bmi088, ist8310, calculate the euler angle
@@ -292,7 +317,19 @@ void INS_task(void const *pvParameters)
 
     imu_start_dma_flag = 1;
     
-    while (1)
+    //1-10-2023修改 没用了哈
+		INS_gimbal_gyro = &INS_gyro;
+		INS_gimbal_angle = &INS_angle;
+		INS_gimbal_quat = &INS_quat;
+		
+		//SZL 1-14-2023 低通滤波应在 INS_task中完成
+		//BCMD pitch rate 低通滤波
+		const static fp32 bcmd_pitch_rate_1order_filter[1] = {BCMD_PITCH_RATE_ACCEL_NUM};
+		
+		//bcmd pitch rate 使用低通滤波
+		first_order_filter_init(&bcmd_pitch_rate_low_pass_filter, INS_TASK_CONTROL_TIME, bcmd_pitch_rate_1order_filter);
+		
+		while (1)
     {
         //wait spi DMA tansmit done
         //等待SPI DMA传输
@@ -343,15 +380,24 @@ void INS_task(void const *pvParameters)
         accel_fliter_3[2] = accel_fliter_2[2] * fliter_num[0] + accel_fliter_1[2] * fliter_num[1] + INS_accel[2] * fliter_num[2];
 
 
-        AHRS_update(INS_quat, timing_time, INS_gyro, accel_fliter_3, INS_mag);
-        get_angle(INS_quat, INS_angle + INS_YAW_ADDRESS_OFFSET, INS_angle + INS_PITCH_ADDRESS_OFFSET, INS_angle + INS_ROLL_ADDRESS_OFFSET);
-
-				//SZL 2-2-2022 add; 5-31-2022 add
-				matrix_3x3_pre_mult_vector(INS_gyro, tpyeC_to_gimbal_GYRO_permutation, INS_gimbal_gyro);
-				matrix_3x3_pre_mult_vector(INS_angle, tpyeC_to_gimbal_permutation, INS_gimbal_angle);
+//        AHRS_update(INS_quat, timing_time, INS_gyro, accel_fliter_3, INS_mag);
+//        get_angle(INS_quat, INS_angle + INS_YAW_ADDRESS_OFFSET, INS_angle + INS_PITCH_ADDRESS_OFFSET, INS_angle + INS_ROLL_ADDRESS_OFFSET);
 				
-				quat_matrix_3x3_pre_mult_vector(INS_quat, tpyeC_to_gimbal_QUAT_permutation, INS_gimbal_quat);
-				//
+				AHRS_update_ins(INS_quat, timing_time, INS_gyro, accel_fliter_3, INS_mag);
+				get_angle_ins(INS_quat, INS_angle + INS_YAW_ADDRESS_OFFSET, INS_angle + INS_PITCH_ADDRESS_OFFSET, INS_angle + INS_ROLL_ADDRESS_OFFSET);
+
+				//1-10-2023修改
+//				//SZL 2-2-2022 add; 5-31-2022 add
+//				matrix_3x3_pre_mult_vector(INS_gyro, tpyeC_to_gimbal_GYRO_permutation, INS_gimbal_gyro);
+//				matrix_3x3_pre_mult_vector(INS_angle, tpyeC_to_gimbal_permutation, INS_gimbal_angle);
+//				
+//				quat_matrix_3x3_pre_mult_vector(INS_quat, tpyeC_to_gimbal_QUAT_permutation, INS_gimbal_quat);
+//				//
+
+				//开始滤波
+				//pitch角速度低通滤波
+				first_order_filter_cali(&bcmd_pitch_rate_low_pass_filter, INS_gyro[INS_GYRO_PITCH_ADDRESS_OFFSET]);
+				INS_gyro_pitch_low_pass_filtered_val = bcmd_pitch_rate_low_pass_filter.out;
 
         //because no use ist8310 and save time, no use
         if(mag_update_flag &= 1 << IMU_DR_SHFITS)
@@ -364,7 +410,27 @@ void INS_task(void const *pvParameters)
     }
 }
 
+//未使用 init 还是使用库中的
+void AHRS_init_ins(fp32 quat[4], fp32 accel[3], fp32 mag[3])
+{
+    quat[0] = 1.0f;
+    quat[1] = 0.0f;
+    quat[2] = 0.0f;
+    quat[3] = 0.0f;
 
+}
+
+//
+void AHRS_update_ins(fp32 quat[4], fp32 time, fp32 gyro[3], fp32 accel[3], fp32 mag[3])
+{
+    MahonyAHRSupdate(quat, gyro[0], gyro[1], gyro[2], accel[0], accel[1], accel[2], mag[0], mag[1], mag[2]);
+}
+void get_angle_ins(fp32 q[4], fp32 *yaw, fp32 *pitch, fp32 *roll)
+{
+    *yaw = atan2f(2.0f*(q[0]*q[3]+q[1]*q[2]), 2.0f*(q[0]*q[0]+q[1]*q[1])-1.0f);
+    *pitch = asinf(-2.0f*(q[1]*q[3]-q[0]*q[2]));
+    *roll = atan2f(2.0f*(q[0]*q[1]+q[2]*q[3]),2.0f*(q[0]*q[0]+q[3]*q[3])-1.0f);
+}
 
 
 /**
@@ -522,6 +588,11 @@ void INS_set_cali_gyro(fp32 cali_scale[3], fp32 cali_offset[3])
     gyro_offset[2] = gyro_cali_offset[2];
 }
 
+fp32 get_INS_gyro_pitch_low_pass_filtered_val()
+{
+	return INS_gyro_pitch_low_pass_filtered_val;
+}
+
 /**
   * @brief          get the quat
   * @param[in]      none
@@ -546,24 +617,27 @@ const fp32 *get_INS_quat_point(void)
   * @param[in]      none
   * @retval         INS_angle的指针
   */
-const fp32 *get_INS_angle_point(void)
+//const fp32 *get_INS_angle_point(void)
+//{
+//    return INS_angle;
+//}
+/*SZL 2-2-2022 添加 新步兵 开发板旋转之后; 1-10-2023第二次修改*/
+//get_INS_gimbal_angle_point
+const fp32 * get_INS_angle_point(void)
 {
-    return INS_angle;
-}
-/*SZL 2-2-2022 添加 新步兵 开发板旋转之后*/
-const fp32 *get_INS_gimbal_angle_point(void)
-{
-    return INS_gimbal_angle;
-}
-
-const fp32 *get_INS_gimbal_gyro_point(void)
-{
-		return INS_gimbal_gyro;
+    return INS_angle;//*INS_gimbal_angle;
 }
 
-const fp32 *get_INS_gimbal_quat(void)
+//get_INS_gimbal_gyro_point
+const fp32 *get_INS_gyro_point(void)
 {
-		return INS_gimbal_quat;
+		return INS_gyro; //*INS_gimbal_gyro;
+}
+
+//get_INS_gimbal_quat
+const fp32 *get_INS_quat(void)
+{
+		return INS_quat; //*INS_gimbal_quat;
 }
 
 /**

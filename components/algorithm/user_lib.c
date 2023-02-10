@@ -2,7 +2,7 @@
 #include "arm_math.h"
 
 //快速开方
-fp32 invSqrt(fp32 num)
+fp32 invSqrt_user_lib(fp32 num)
 {
     fp32 halfnum = 0.5f * num;
     fp32 y = num;
@@ -79,7 +79,10 @@ void first_order_filter_cali(first_order_filter_type_t *first_order_filter_type,
 {
     first_order_filter_type->input = input;
     first_order_filter_type->out =
-        first_order_filter_type->num[0] / (first_order_filter_type->num[0] + first_order_filter_type->frame_period) * first_order_filter_type->out + first_order_filter_type->frame_period / (first_order_filter_type->num[0] + first_order_filter_type->frame_period) * first_order_filter_type->input;
+        first_order_filter_type->num[0] / (first_order_filter_type->num[0] + 
+				first_order_filter_type->frame_period) * first_order_filter_type->out + 
+				first_order_filter_type->frame_period / (first_order_filter_type->num[0] + first_order_filter_type->frame_period) * 
+				first_order_filter_type->input;
 }
 
 //绝对限制

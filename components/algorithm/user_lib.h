@@ -19,7 +19,7 @@ typedef __packed struct
     fp32 frame_period; //滤波的时间间隔 单位 s
 } first_order_filter_type_t;
 //快速开方
-extern fp32 invSqrt(fp32 num);
+extern fp32 invSqrt_user_lib(fp32 num);
 
 //斜波函数初始化
 void ramp_init(ramp_function_source_t *ramp_source_type, fp32 frame_period, fp32 max, fp32 min);

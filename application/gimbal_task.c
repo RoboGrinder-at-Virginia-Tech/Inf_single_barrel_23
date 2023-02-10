@@ -669,8 +669,8 @@ static void gimbal_init(gimbal_control_t *init)
     init->gimbal_pitch_motor.gimbal_motor_measure = get_pitch_gimbal_motor_measure_point();
     //陀螺仪数据指针获取
 		//SZL-2-3-2022修改
-    init->gimbal_INT_angle_point = get_INS_gimbal_angle_point();
-    init->gimbal_INT_gyro_point = get_INS_gimbal_gyro_point();
+    init->gimbal_INT_angle_point = get_INS_angle_point();
+    init->gimbal_INT_gyro_point = get_INS_gyro_point();
     //遥控器数据指针获取
     init->gimbal_rc_ctrl = get_remote_control_point();
     //初始化电机模式

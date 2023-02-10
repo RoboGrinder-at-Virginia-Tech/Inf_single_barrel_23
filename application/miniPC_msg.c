@@ -83,7 +83,7 @@ void init_miniPC_comm_struct_data(void)
 	//init information pckg
 	embed_msg_to_pc.chassis_move_ptr = get_chassis_pointer();
 	embed_msg_to_pc.gimbal_control_ptr = get_gimbal_pointer();
-	embed_msg_to_pc.quat_ptr = get_INS_gimbal_quat();
+	embed_msg_to_pc.quat_ptr = get_INS_quat();
 	embed_msg_to_pc.shoot_control_ptr = get_robot_shoot_control();
 	
 	embed_send_protocol.p_header = &pc_send_header;

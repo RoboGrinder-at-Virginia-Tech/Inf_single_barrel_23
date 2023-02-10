@@ -55,31 +55,82 @@
 
 #define INS_TASK_INIT_TIME 7 //任务开始初期 delay 一段时间
 
+/*
+滤波需要用上的 估计的 轮询时间 
+MahoneyAHRS中 #define sampleFreq	1000.0f			// sample frequency in Hz
+1/1000 = 0.001f
+
+这个数字之前是 CHASSIS_CONTROL_TIME 0.002f
+*/
+#define INS_TASK_CONTROL_TIME 0.001f
+
+//低通滤波参数
+#define BCMD_PITCH_RATE_ACCEL_NUM 0.65f //0.6f
+
 //SZL: 一下这三个是对应原先的INS_angle
-#define INS_YAW_ADDRESS_OFFSET    0
+/*
+"angle" -> 欧拉角 第一组宏
+"gyro" -> 角速度 第二组宏
+"quat" -> 四元数 第三组宏
+Note that it is modified angin in 1-10-2023
+
+这几个宏的意义: 标记 标定的index 取原数组中第几个 代表它所代表的对应轴角
+*/
+//#define INS_YAW_ADDRESS_OFFSET    0
+//#define INS_PITCH_ADDRESS_OFFSET  1
+//#define INS_ROLL_ADDRESS_OFFSET   2
+#define INS_YAW_ADDRESS_OFFSET    2
 #define INS_PITCH_ADDRESS_OFFSET  1
-#define INS_ROLL_ADDRESS_OFFSET   2
+#define INS_ROLL_ADDRESS_OFFSET   0
 
-#define INS_GYRO_X_ADDRESS_OFFSET 0
-#define INS_GYRO_Y_ADDRESS_OFFSET 1
-#define INS_GYRO_Z_ADDRESS_OFFSET 2
+/*
+1-10-2023修改后 INS_gyro[..]顺序 即 Roll Pitch Yaw
+*/
+#define INS_GYRO_YAW_ADDRESS_OFFSET    2
+#define INS_GYRO_PITCH_ADDRESS_OFFSET  1
+#define INS_GYRO_ROLL_ADDRESS_OFFSET   0
 
-#define INS_ACCEL_X_ADDRESS_OFFSET 0
-#define INS_ACCEL_Y_ADDRESS_OFFSET 1
-#define INS_ACCEL_Z_ADDRESS_OFFSET 2
+#define INS_QUAT_YAW_ADDRESS_OFFSET    3
+#define INS_QUAT_PITCH_ADDRESS_OFFSET  2
+#define INS_QUAT_ROLL_ADDRESS_OFFSET   1
+#define INS_QUAT_INDEX0 0
 
-#define INS_MAG_X_ADDRESS_OFFSET 0
-#define INS_MAG_Y_ADDRESS_OFFSET 1
-#define INS_MAG_Z_ADDRESS_OFFSET 2
+
+/*-----------------------------------------------------*/
+//#define INS_GYRO_X_ADDRESS_OFFSET 0
+//#define INS_GYRO_Y_ADDRESS_OFFSET 1
+//#define INS_GYRO_Z_ADDRESS_OFFSET 2
+
+//#define INS_ACCEL_X_ADDRESS_OFFSET 0
+//#define INS_ACCEL_Y_ADDRESS_OFFSET 1
+//#define INS_ACCEL_Z_ADDRESS_OFFSET 2
+
+//#define INS_MAG_X_ADDRESS_OFFSET 0
+//#define INS_MAG_Y_ADDRESS_OFFSET 1
+//#define INS_MAG_Z_ADDRESS_OFFSET 2
 
 //SZL 2-2-2022 add for new infantry
-#define INS_gimbal_angle_YAW_ADDRESS_OFFSET    0
-#define INS_gimbal_angle_PITCH_ADDRESS_OFFSET  1
-#define INS_gimbal_angle_ROLL_ADDRESS_OFFSET   2
+/*
+"angle" -> 欧拉角
+"gyro" -> 角速度
+Note that it is modified angin in 1-10-2023
+增加几个宏定义避免耦合 增加兼容性
 
-#define INS_gimbal_gyro_YAW_ADDRESS_OFFSET    0
-#define INS_gimbal_gyro_PITCH_ADDRESS_OFFSET  1
-#define INS_gimbal_gyro_ROLL_ADDRESS_OFFSET   2
+这几个宏的意义: 标记 标定的index 取原数组中第几个 代表它所代表的意思
+*/
+//以下两组应与INS_gyro和INS_angle一样
+#define INS_gimbal_angle_YAW_ADDRESS_OFFSET    INS_YAW_ADDRESS_OFFSET
+#define INS_gimbal_angle_PITCH_ADDRESS_OFFSET  INS_PITCH_ADDRESS_OFFSET
+#define INS_gimbal_angle_ROLL_ADDRESS_OFFSET   INS_ROLL_ADDRESS_OFFSET
+
+#define INS_gimbal_gyro_YAW_ADDRESS_OFFSET    INS_GYRO_YAW_ADDRESS_OFFSET
+#define INS_gimbal_gyro_PITCH_ADDRESS_OFFSET  INS_GYRO_PITCH_ADDRESS_OFFSET
+#define INS_gimbal_gyro_ROLL_ADDRESS_OFFSET   INS_GYRO_ROLL_ADDRESS_OFFSET
+
+#define INS_gimbal_quat_YAW_ADDRESS_OFFSET    INS_QUAT_YAW_ADDRESS_OFFSET
+#define INS_gimbal_quat_PITCH_ADDRESS_OFFSET  INS_QUAT_PITCH_ADDRESS_OFFSET
+#define INS_gimbal_quat_ROLL_ADDRESS_OFFSET   INS_QUAT_ROLL_ADDRESS_OFFSET
+
 
 /**
   * @brief          imu task, init bmi088, ist8310, calculate the euler angle
@@ -161,9 +212,9 @@ extern const fp32 *get_INS_angle_point(void);
   */
 extern const fp32 *get_gyro_data_point(void);
 
-extern const fp32 *get_INS_gimbal_angle_point(void);
-extern const fp32 *get_INS_gimbal_gyro_point(void);
-extern const fp32 *get_INS_gimbal_quat(void);
+extern const fp32 *get_INS_angle_point(void);
+extern const fp32 *get_INS_gyro_point(void);
+extern const fp32 *get_INS_quat(void);
 /**
   * @brief          get aceel, 0:x-axis, 1:y-axis, 2:roll-axis unit m/s2
   * @param[in]      none
@@ -187,5 +238,8 @@ extern const fp32 *get_accel_data_point(void);
   * @retval         INS_mag的指针
   */
 extern const fp32 *get_mag_data_point(void);
+
+//滤波后相关参数
+extern fp32 get_INS_gyro_pitch_low_pass_filtered_val(void);
 
 #endif
