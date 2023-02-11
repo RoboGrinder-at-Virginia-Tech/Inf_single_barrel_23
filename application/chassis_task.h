@@ -77,8 +77,14 @@
 0.285m/2 + 0.420m/2 = 0.3525f
 
 之前的数 0.2f
+
+Single barrel infantry 2023 chassis version 1 2-10-2023
+长=轴距: 365mm = 0.356m
+宽=轮距: 360mm = 0.360m
+0.356m/2 + 0.360m/2 = .178+.180 = 0.358 
+
 */
-#define MOTOR_DISTANCE_TO_CENTER 0.3525f
+#define MOTOR_DISTANCE_TO_CENTER 0.358f //0.3525f
 
 //chassis task control time  2ms
 //底盘任务控制间隔 2ms
